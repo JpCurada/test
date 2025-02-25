@@ -11,11 +11,15 @@ import (
 )
 
 // AuthMiddleware authenticates users
-type AuthMiddleware struct{}
+type AuthMiddleware struct {
+	Secret string // Add secret as a field
+}
 
 // NewAuthMiddleware creates a new authentication middleware
-func NewAuthMiddleware() *AuthMiddleware {
-	return &AuthMiddleware{}
+func NewAuthMiddleware(secret string) *AuthMiddleware { // Pass secret as a parameter
+	return &AuthMiddleware{
+		Secret: secret,
+	}
 }
 
 // Authenticate authenticates a request
@@ -29,7 +33,7 @@ func (m *AuthMiddleware) Authenticate(next http.Handler) http.Handler {
 		}
 
 		// Validate token
-		claims, err := utils.ValidateJWT(token)
+		claims, err := utils.ValidateJWT(token, m.Secret) // Use the secret from the struct
 		if err != nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return

@@ -3,12 +3,12 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"log"
 
-	_ "github.com/lib/pq"
 	"github.com/ISKOnnect/iskonnect-web/internal/config"
+	_ "github.com/lib/pq"
 )
 
-// Connect establishes a connection to the database
 func Connect(cfg config.DatabaseConfig) (*sql.DB, error) {
 	connStr := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
@@ -17,14 +17,16 @@ func Connect(cfg config.DatabaseConfig) (*sql.DB, error) {
 
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
+		log.Printf("Failed to open database connection: %v", err)
 		return nil, err
 	}
 
 	if err = db.Ping(); err != nil {
+		log.Printf("Failed to ping database: %v", err)
 		return nil, err
 	}
 
-	// Set connection pool parameters
+	log.Printf("Successfully connected to database: %s", cfg.DBName)
 	db.SetMaxOpenConns(25)
 	db.SetMaxIdleConns(25)
 

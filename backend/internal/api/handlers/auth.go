@@ -4,7 +4,7 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
-	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -34,11 +34,11 @@ func NewAuthHandler(db *sql.DB, cfg *config.Config) *AuthHandler {
 
 // RegisterRequest represents a user registration request
 type RegisterRequest struct {
-	StudentNumber  string `json:"student_number"`
-	FirstName      string `json:"first_name"`
-	LastName       string `json:"last_name"`
-	Email          string `json:"email"`
-	Password       string `json:"password"`
+	StudentNumber   string `json:"student_number"`
+	FirstName       string `json:"first_name"`
+	LastName        string `json:"last_name"`
+	Email           string `json:"email"`
+	Password        string `json:"password"`
 	ConfirmPassword string `json:"confirm_password"`
 }
 
@@ -50,90 +50,100 @@ type LoginRequest struct {
 
 // Register handles user registration
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
-	var req RegisterRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
-		return
-	}
+    var req RegisterRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        log.Printf("Error decoding request: %v", err)
+        http.Error(w, "Invalid request", http.StatusBadRequest)
+        return
+    }
 
-	// Validate request
-	if req.StudentNumber == "" || req.FirstName == "" || req.LastName == "" || req.Email == "" || req.Password == "" {
-		http.Error(w, "Missing required fields", http.StatusBadRequest)
-		return
-	}
+    log.Printf("Received registration request: %+v", req)
 
-	if req.Password != req.ConfirmPassword {
-		http.Error(w, "Passwords do not match", http.StatusBadRequest)
-		return
-	}
+    // Validate request
+    if req.StudentNumber == "" || req.FirstName == "" || req.LastName == "" || req.Email == "" || req.Password == "" {
+        log.Printf("Missing required fields in request: %+v", req)
+        http.Error(w, "Missing required fields", http.StatusBadRequest)
+        return
+    }
 
-	// Check if user already exists
-	_, err := h.UserModel.GetByEmail(req.Email)
-	if err == nil {
-		http.Error(w, "Email already registered", http.StatusConflict)
-		return
-	} else if !errors.Is(err, errors.New("user not found")) {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+    if req.Password != req.ConfirmPassword {
+        log.Printf("Passwords do not match for request: %+v", req)
+        http.Error(w, "Passwords do not match", http.StatusBadRequest)
+        return
+    }
 
-	// Check if student number already exists
-	_, err = h.UserModel.GetByStudentNumber(req.StudentNumber)
-	if err == nil {
-		http.Error(w, "Student number already registered", http.StatusConflict)
-		return
-	} else if !errors.Is(err, errors.New("user not found")) {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+    // Check if user already exists
+    _, err := h.UserModel.GetByEmail(req.Email)
+    if err == nil {
+        log.Printf("Email already registered: %s", req.Email)
+        http.Error(w, "Email already registered", http.StatusConflict)
+        return
+    } else if err != sql.ErrNoRows { // Check for sql.ErrNoRows instead of custom error
+        log.Printf("Database error checking email %s: %v", req.Email, err)
+        http.Error(w, "Internal server error", http.StatusInternalServerError)
+        return
+    }
 
-	// Hash the password
-	hashedPassword, err := utils.HashPassword(req.Password)
-	if err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+    // Check if student number already exists
+    _, err = h.UserModel.GetByStudentNumber(req.StudentNumber)
+    if err == nil {
+        log.Printf("Student number already registered: %s", req.StudentNumber)
+        http.Error(w, "Student number already registered", http.StatusConflict)
+        return
+    } else if err != sql.ErrNoRows { // Check for sql.ErrNoRows instead of custom error
+        log.Printf("Database error checking student number %s: %v", req.StudentNumber, err)
+        http.Error(w, "Internal server error", http.StatusInternalServerError)
+        return
+    }
 
-	// Create user
-	user := &models.User{
-		ID:            req.StudentNumber,
-		FirstName:     req.FirstName,
-		LastName:      req.LastName,
-		Email:         req.Email,
-		UserType:      models.UserTypeStudent,
-		Points:        0,
-		EmailVerified: false,
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
-	}
+    // Hash the password
+    hashedPassword, err := utils.HashPassword(req.Password)
+    if err != nil {
+        log.Printf("Error hashing password for %s: %v", req.StudentNumber, err)
+        http.Error(w, "Internal server error", http.StatusInternalServerError)
+        return
+    }
 
-	if err := h.UserModel.Create(user, hashedPassword); err != nil {
-		http.Error(w, "Failed to create user", http.StatusInternalServerError)
-		return
-	}
+    // Create user
+    user := &models.User{
+        ID:            req.StudentNumber,
+        FirstName:     req.FirstName,
+        LastName:      req.LastName,
+        Email:         req.Email,
+        UserType:      models.UserTypeStudent,
+        Points:        0,
+        EmailVerified: false,
+        CreatedAt:     time.Now(),
+        UpdatedAt:     time.Now(),
+    }
 
-	// Generate verification token
-	token, err := utils.GenerateRandomToken(32)
-	if err != nil {
-		http.Error(w, "Failed to generate verification token", http.StatusInternalServerError)
-		return
-	}
+    if err := h.UserModel.Create(user, hashedPassword); err != nil {
+        log.Printf("Error creating user %s: %v", req.StudentNumber, err)
+        http.Error(w, "Failed to create user", http.StatusInternalServerError)
+        return
+    }
 
-	// Store verification token in database
-	// In a real app, you'd store the token with an expiry time
-	
-	// Send verification email
-	if err := h.EmailSender.SendVerificationEmail(req.Email, token); err != nil {
-		// Log the error but don't return it to the client
-		// In a real app, you'd handle this more gracefully
-		http.Error(w, "Registration successful, but failed to send verification email", http.StatusOK)
-		return
-	}
+    // Generate verification token
+    token, err := utils.GenerateRandomToken(32)
+    if err != nil {
+        log.Printf("Error generating verification token for %s: %v", req.StudentNumber, err)
+        http.Error(w, "Failed to generate verification token", http.StatusInternalServerError)
+        return
+    }
 
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "Registration successful. Please check your email to verify your account.",
-	})
+    // Send verification email (for now, log instead of sending to isolate the issue)
+    log.Printf("Would send verification email to %s with token %s", req.Email, token)
+    if err := h.EmailSender.SendVerificationEmail(req.Email, token); err != nil {
+        log.Printf("Failed to send verification email to %s: %v", req.Email, err)
+        // For testing, don’t fail the request but log the error
+        http.Error(w, "Registration successful, but failed to send verification email", http.StatusOK)
+        return
+    }
+
+    w.WriteHeader(http.StatusCreated)
+    json.NewEncoder(w).Encode(map[string]string{
+        "message": "Registration successful. Please check your email to verify your account.",
+    })
 }
 
 // VerifyEmail handles email verification
@@ -194,13 +204,13 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate JWT tokens
-	accessToken, err := utils.GenerateJWT(user, 24) // 24 hours
+	accessToken, err := utils.GenerateJWT(user, h.Config.JWT.Secret, 24) // 24 hours
 	if err != nil {
 		http.Error(w, "Failed to generate access token", http.StatusInternalServerError)
 		return
 	}
 
-	refreshToken, err := utils.GenerateJWT(user, 168) // 7 days
+	refreshToken, err := utils.GenerateJWT(user, h.Config.JWT.Secret, 168) // 7 days
 	if err != nil {
 		http.Error(w, "Failed to generate refresh token", http.StatusInternalServerError)
 		return
@@ -284,7 +294,7 @@ func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	refreshToken := cookie.Value
 
 	// Validate refresh token
-	claims, err := utils.ValidateJWT(refreshToken)
+	claims, err := utils.ValidateJWT(refreshToken, h.Config.JWT.Secret)
 	if err != nil {
 		http.Error(w, "Invalid refresh token", http.StatusUnauthorized)
 		return
@@ -298,7 +308,7 @@ func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate new access token
-	accessToken, err := utils.GenerateJWT(user, 24) // 24 hours
+	accessToken, err := utils.GenerateJWT(user, h.Config.JWT.Secret, 24) // 24 hours
 	if err != nil {
 		http.Error(w, "Failed to generate access token", http.StatusInternalServerError)
 		return

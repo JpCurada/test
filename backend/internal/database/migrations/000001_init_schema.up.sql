@@ -110,3 +110,4 @@ INSERT INTO badges (name, description, image_url, requirement_points) VALUES
 ('Freshie Fighter', 'You have started your journey as a contributor!', '/badges/freshie-fighter.png', 0),
 ('Dean''s Defender', 'You have become a respected contributor!', '/badges/deans-defender.png', 50),
 ('Supreme ISKOlar', 'You are among the elite contributors!', '/badges/supreme-iskolar.png', 100);
+
