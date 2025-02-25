@@ -67,66 +67,64 @@ func (m *UserModel) GetByID(id string) (*User, error) {
 	return &user, nil
 }
 
-// GetByEmail retrieves a user by email
 func (m *UserModel) GetByEmail(email string) (*User, error) {
-	query := `
-		SELECT id, first_name, last_name, email, user_type, points, email_verified, created_at, updated_at
-		FROM users
-		WHERE email = $1
-	`
+    query := `
+        SELECT id, first_name, last_name, email, user_type, points, email_verified, created_at, updated_at
+        FROM users
+        WHERE email = $1
+    `
 
-	var user User
-	err := m.DB.QueryRow(query, email).Scan(
-		&user.ID,
-		&user.FirstName,
-		&user.LastName,
-		&user.Email,
-		&user.UserType,
-		&user.Points,
-		&user.EmailVerified,
-		&user.CreatedAt,
-		&user.UpdatedAt,
-	)
+    var user User
+    err := m.DB.QueryRow(query, email).Scan(
+        &user.ID,
+        &user.FirstName,
+        &user.LastName,
+        &user.Email,
+        &user.UserType,
+        &user.Points,
+        &user.EmailVerified,
+        &user.CreatedAt,
+        &user.UpdatedAt,
+    )
 
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("user not found")
-		}
-		return nil, err
-	}
+    if err != nil {
+        if errors.Is(err, sql.ErrNoRows) {
+            return nil, sql.ErrNoRows // Return sql.ErrNoRows directly
+        }
+        return nil, err
+    }
 
-	return &user, nil
+    return &user, nil
 }
 
-// GetByStudentNumber retrieves a user by student number (used for login)
 func (m *UserModel) GetByStudentNumber(studentNumber string) (*User, error) {
-	query := `
-		SELECT id, first_name, last_name, email, user_type, points, email_verified, created_at, updated_at
-		FROM users
-		WHERE id = $1
-	`
+    query := `
+        SELECT id, first_name, last_name, email, user_type, points, email_verified, created_at, updated_at
+        FROM users
+        WHERE id = $1
+    `
 
-	var user User
-	err := m.DB.QueryRow(query, studentNumber).Scan(
-		&user.ID,
-		&user.FirstName,
-		&user.LastName,
-		&user.Email,
-		&user.UserType,
-		&user.Points,
-		&user.EmailVerified,
-		&user.CreatedAt,
-		&user.UpdatedAt,
-	)
+    var user User
+    err := m.DB.QueryRow(query, studentNumber).Scan(
+        &user.ID,
+        &user.FirstName,
+        &user.LastName,
+        &user.Email,
+        &user.UserType,
+        &user.Points,
+        &user.EmailVerified,
+        &user.CreatedAt,
+        &user.UpdatedAt,
+    )
 
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("user not found")
-		}
-		return nil, err
-	}
+    if err != nil {
+        if errors.Is(err, sql.ErrNoRows) {
+            return nil, sql.ErrNoRows // Return sql.ErrNoRows directly
+        }
+        return nil, err
+    }
 
-	return &user, nil
+    return &user, nil
 }
 
 // Create inserts a new user into the database
@@ -278,4 +276,42 @@ func (m *UserModel) UpdatePassword(userID, passwordHash string) error {
 	`
 	_, err := m.DB.Exec(query, passwordHash, userID)
 	return err
+}
+
+// StoreVerificationToken stores a verification token for a user
+func (m *UserModel) StoreVerificationToken(userID string, token string, expiresAt time.Time) error {
+    query := `
+        INSERT INTO email_verifications (user_id, token, expires_at, created_at)
+        VALUES ($1, $2, $3, $4)
+    `
+    _, err := m.DB.Exec(query, userID, token, expiresAt, time.Now())
+    return err
+}
+
+// VerifyEmailToken verifies a verification token and returns the user ID
+func (m *UserModel) VerifyEmailToken(token string) (string, error) {
+    query := `
+        SELECT user_id
+        FROM email_verifications
+        WHERE token = $1 AND expires_at > NOW()
+    `
+    var userID string
+    err := m.DB.QueryRow(query, token).Scan(&userID)
+    if err != nil {
+        if errors.Is(err, sql.ErrNoRows) {
+            return "", errors.New("invalid or expired token")
+        }
+        return "", err
+    }
+    return userID, nil
+}
+
+// DeleteVerificationToken deletes a verification token after use
+func (m *UserModel) DeleteVerificationToken(token string) error {
+    query := `
+        DELETE FROM email_verifications
+        WHERE token = $1
+    `
+    _, err := m.DB.Exec(query, token)
+    return err
 }

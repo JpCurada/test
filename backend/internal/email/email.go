@@ -23,23 +23,23 @@ func NewSender(cfg config.EmailConfig) *Sender {
 
 // SendVerificationEmail sends an email with a verification link
 func (s *Sender) SendVerificationEmail(to, token string) error {
-	subject := "Verify Your ISKOnnect Account"
-	verificationLink := fmt.Sprintf("http://localhost:8080/verify-email?token=%s", token)
+    subject := "Verify Your ISKOnnect Account"
+    verificationLink := fmt.Sprintf("http://localhost:8080/api/auth/verify-email?token=%s", token) // Ensure this is /api/auth/verify-email
 
-	templateData := struct {
-		Name             string
-		VerificationLink string
-	}{
-		Name:             to,
-		VerificationLink: verificationLink,
-	}
+    templateData := struct {
+        Name             string
+        VerificationLink string
+    }{
+        Name:             to,
+        VerificationLink: verificationLink,
+    }
 
-	body, err := s.parseTemplate("verification.html", templateData)
-	if err != nil {
-		return err
-	}
+    body, err := s.parseTemplate("verification.html", templateData)
+    if err != nil {
+        return err
+    }
 
-	return s.sendEmail(to, subject, body)
+    return s.sendEmail(to, subject, body)
 }
 
 // SendPasswordResetEmail sends an email with a password reset OTP

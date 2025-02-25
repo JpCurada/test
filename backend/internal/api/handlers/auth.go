@@ -78,7 +78,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
         log.Printf("Email already registered: %s", req.Email)
         http.Error(w, "Email already registered", http.StatusConflict)
         return
-    } else if err != sql.ErrNoRows { // Check for sql.ErrNoRows instead of custom error
+    } else if err != sql.ErrNoRows {
         log.Printf("Database error checking email %s: %v", req.Email, err)
         http.Error(w, "Internal server error", http.StatusInternalServerError)
         return
@@ -90,7 +90,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
         log.Printf("Student number already registered: %s", req.StudentNumber)
         http.Error(w, "Student number already registered", http.StatusConflict)
         return
-    } else if err != sql.ErrNoRows { // Check for sql.ErrNoRows instead of custom error
+    } else if err != sql.ErrNoRows {
         log.Printf("Database error checking student number %s: %v", req.StudentNumber, err)
         http.Error(w, "Internal server error", http.StatusInternalServerError)
         return
@@ -123,7 +123,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    // Generate verification token
+    // Generate verification token and store it
     token, err := utils.GenerateRandomToken(32)
     if err != nil {
         log.Printf("Error generating verification token for %s: %v", req.StudentNumber, err)
@@ -131,7 +131,14 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    // Send verification email (for now, log instead of sending to isolate the issue)
+    // Store the verification token with a 24-hour expiry
+    if err := h.UserModel.StoreVerificationToken(user.ID, token, time.Now().Add(24*time.Hour)); err != nil {
+        log.Printf("Failed to store verification token for %s: %v", req.StudentNumber, err)
+        http.Error(w, "Failed to store verification token", http.StatusInternalServerError)
+        return
+    }
+
+    // Send verification email
     log.Printf("Would send verification email to %s with token %s", req.Email, token)
     if err := h.EmailSender.SendVerificationEmail(req.Email, token); err != nil {
         log.Printf("Failed to send verification email to %s: %v", req.Email, err)
@@ -148,20 +155,37 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 // VerifyEmail handles email verification
 func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
-	token := r.URL.Query().Get("token")
-	if token == "" {
-		http.Error(w, "Missing token", http.StatusBadRequest)
-		return
-	}
+    token := r.URL.Query().Get("token")
+    if token == "" {
+        http.Error(w, "Missing token", http.StatusBadRequest)
+        return
+    }
 
-	// In a real app, you'd verify the token against what's stored in the database
-	// and update the user's verified status
-	// For simplicity, we'll just respond with success
+    // Verify the token and get the user ID
+    userID, err := h.UserModel.VerifyEmailToken(token)
+    if err != nil {
+        log.Printf("Invalid or expired token: %v", err)
+        http.Error(w, "Invalid or expired verification token", http.StatusBadRequest)
+        return
+    }
 
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "Email verified successfully. You can now log in.",
-	})
+    // Update the user's email verification status
+    if err := h.UserModel.VerifyEmail(userID); err != nil {
+        log.Printf("Failed to verify email for user %s: %v", userID, err)
+        http.Error(w, "Failed to verify email", http.StatusInternalServerError)
+        return
+    }
+
+    // Delete the used token
+    if err := h.UserModel.DeleteVerificationToken(token); err != nil {
+        log.Printf("Failed to delete verification token for user %s: %v", userID, err)
+        // Don’t fail the request, but log the error
+    }
+
+    w.WriteHeader(http.StatusOK)
+    json.NewEncoder(w).Encode(map[string]string{
+        "message": "Email verified successfully. You can now log in.",
+    })
 }
 
 // Login handles user login
