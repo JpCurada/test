@@ -1,71 +1,46 @@
 package utils
 
 import (
-	"errors"
+	"fmt"
+	"strconv"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/ISKOnnect/iskonnect-web/internal/models"
+	"github.com/golang-jwt/jwt/v5"
 )
 
-// JWTClaims represents the claims in a JWT
 type JWTClaims struct {
-	UserID   string         `json:"user_id"`
-	UserType models.UserType `json:"user_type"`
+	UserID    int  `json:"user_id"`
+	IsStudent bool `json:"is_student"`
 	jwt.RegisteredClaims
 }
 
-// GenerateJWT creates a new JWT token for a user
 func GenerateJWT(user *models.User, secret string, expiryHours int) (string, error) {
-	// Set expiration time
-	expirationTime := time.Now().Add(time.Duration(expiryHours) * time.Hour)
-
-	// Create claims
 	claims := &JWTClaims{
-		UserID:   user.ID,
-		UserType: user.UserType,
+		UserID:    user.ID,
+		IsStudent: user.IsStudent,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expirationTime),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(expiryHours) * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Subject:   user.ID,
+			Subject:   strconv.Itoa(user.ID),
 		},
 	}
-
-	// Create token
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-
-	// Sign token with secret key
-	tokenString, err := token.SignedString([]byte(secret))
-	if err != nil {
-		return "", err
-	}
-
-	return tokenString, nil
+	return token.SignedString([]byte(secret))
 }
 
-// ValidateJWT validates a JWT token
 func ValidateJWT(tokenString, secret string) (*JWTClaims, error) {
-	// Parse the token
-	token, err := jwt.ParseWithClaims(
-		tokenString,
-		&JWTClaims{},
-		func(token *jwt.Token) (interface{}, error) {
-			// Validate the signing method
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, errors.New("unexpected signing method")
-			}
-			return []byte(secret), nil
-		},
-	)
-
+	token, err := jwt.ParseWithClaims(tokenString, &JWTClaims{}, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method")
+		}
+		return []byte(secret), nil
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	// Validate token and extract claims
 	if claims, ok := token.Claims.(*JWTClaims); ok && token.Valid {
 		return claims, nil
 	}
-
-	return nil, errors.New("invalid token")
+	return nil, fmt.Errorf("invalid token")
 }

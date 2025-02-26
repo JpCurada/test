@@ -10,60 +10,49 @@ import (
 	"syscall"
 	"time"
 
-    "github.com/joho/godotenv"
-    "github.com/ISKOnnect/iskonnect-web/internal/api"
-    "github.com/ISKOnnect/iskonnect-web/internal/config"
-    "github.com/ISKOnnect/iskonnect-web/internal/database"
+	"github.com/ISKOnnect/iskonnect-web/internal/api"
+	"github.com/ISKOnnect/iskonnect-web/internal/config"
+	"github.com/ISKOnnect/iskonnect-web/internal/database"
+	"github.com/joho/godotenv"
 )
 
 func main() {
-	// Load environment variables
 	if err := godotenv.Load(); err != nil {
-		log.Println("Warning: .env file not found")
+		log.Println("No .env file found")
 	}
 
-	// Initialize config
 	cfg := config.New()
-
-	// Initialize database
 	db, err := database.Connect(cfg.Database)
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		log.Fatalf("Database connection failed: %v", err)
 	}
 	defer db.Close()
 
-	// Initialize router
-	r := api.New(db, cfg)
-
-	// Create server
+	router := api.New(db, cfg)
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%s", cfg.Server.Port),
-		Handler:      r,
+		Handler:      router,
 		ReadTimeout:  time.Duration(cfg.Server.ReadTimeoutSeconds) * time.Second,
 		WriteTimeout: time.Duration(cfg.Server.WriteTimeoutSeconds) * time.Second,
 		IdleTimeout:  time.Duration(cfg.Server.IdleTimeoutSeconds) * time.Second,
 	}
 
-	// Start server in goroutine to allow for graceful shutdown
 	go func() {
-		log.Printf("Server starting on port %s", cfg.Server.Port)
+		log.Printf("Server running on :%s", cfg.Server.Port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Failed to start server: %v", err)
+			log.Fatalf("Server failed: %v", err)
 		}
 	}()
 
-	// Wait for interrupt signal to gracefully shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Println("Server is shutting down...")
+	log.Println("Shutting down server...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Server.ShutdownTimeoutSeconds)*time.Second)
 	defer cancel()
-
 	if err := server.Shutdown(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
+		log.Fatalf("Shutdown failed: %v", err)
 	}
-
-	log.Println("Server exited properly")
+	log.Println("Server stopped")
 }

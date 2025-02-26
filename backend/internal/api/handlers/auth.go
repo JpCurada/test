@@ -1,4 +1,3 @@
-// internal/api/handlers/auth.go
 package handlers
 
 import (
@@ -6,6 +5,8 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/ISKOnnect/iskonnect-web/internal/config"
@@ -14,25 +15,22 @@ import (
 	"github.com/ISKOnnect/iskonnect-web/internal/utils"
 )
 
-// AuthHandler handles authentication-related requests
 type AuthHandler struct {
-	DB          *sql.DB
-	Config      *config.Config
-	UserModel   *models.UserModel
-	EmailSender *email.Sender
+	db          *sql.DB
+	cfg         *config.Config
+	userModel   *models.UserModel
+	emailSender *email.Sender
 }
 
-// NewAuthHandler creates a new authentication handler
 func NewAuthHandler(db *sql.DB, cfg *config.Config) *AuthHandler {
 	return &AuthHandler{
-		DB:          db,
-		Config:      cfg,
-		UserModel:   models.NewUserModel(db),
-		EmailSender: email.NewSender(cfg.Email),
+		db:          db,
+		cfg:         cfg,
+		userModel:   models.NewUserModel(db),
+		emailSender: email.NewSender(cfg.Email),
 	}
 }
 
-// RegisterRequest represents a user registration request
 type RegisterRequest struct {
 	StudentNumber   string `json:"student_number"`
 	FirstName       string `json:"first_name"`
@@ -42,153 +40,160 @@ type RegisterRequest struct {
 	ConfirmPassword string `json:"confirm_password"`
 }
 
-// LoginRequest represents a user login request
 type LoginRequest struct {
 	StudentNumber string `json:"student_number"`
 	Password      string `json:"password"`
 }
 
-// Register handles user registration
+func isValidStudentNumber(sn string) bool {
+	return regexp.MustCompile(`^\d{4}-\d{5}-[A-Z]{2}-\d$`).MatchString(sn)
+}
+
+func isValidEmail(email string) bool {
+	return regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`).MatchString(email)
+}
+
+func isValidPassword(password string) bool {
+	return len(password) >= 8 && regexp.MustCompile(`[A-Z]`).MatchString(password) &&
+		regexp.MustCompile(`[a-z]`).MatchString(password) &&
+		regexp.MustCompile(`[0-9]`).MatchString(password) &&
+		regexp.MustCompile(`[!@#$%^&*]`).MatchString(password)
+}
+
+func isValidName(name string) bool {
+	trimmed := strings.TrimSpace(name)
+	return len(trimmed) >= 2 && len(trimmed) <= 50 && regexp.MustCompile(`^[a-zA-Z\s-]+$`).MatchString(trimmed)
+}
+
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
-    var req RegisterRequest
-    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-        log.Printf("Error decoding request: %v", err)
-        http.Error(w, "Invalid request", http.StatusBadRequest)
-        return
-    }
+	var req RegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
 
-    log.Printf("Received registration request: %+v", req)
+	if !isValidStudentNumber(req.StudentNumber) {
+		http.Error(w, "Invalid student number format (e.g., 2023-00239-MN-0)", http.StatusBadRequest)
+		return
+	}
+	if !isValidName(req.FirstName) || !isValidName(req.LastName) {
+		http.Error(w, "Names must be 2-50 letters", http.StatusBadRequest)
+		return
+	}
+	if !isValidEmail(req.Email) {
+		http.Error(w, "Invalid email", http.StatusBadRequest)
+		return
+	}
+	if !isValidPassword(req.Password) {
+		http.Error(w, "Password must be 8+ chars with uppercase, lowercase, number, and special char", http.StatusBadRequest)
+		return
+	}
+	if req.Password != req.ConfirmPassword {
+		http.Error(w, "Passwords do not match", http.StatusBadRequest)
+		return
+	}
 
-    // Validate request
-    if req.StudentNumber == "" || req.FirstName == "" || req.LastName == "" || req.Email == "" || req.Password == "" {
-        log.Printf("Missing required fields in request: %+v", req)
-        http.Error(w, "Missing required fields", http.StatusBadRequest)
-        return
-    }
+	if _, err := h.userModel.GetByEmail(req.Email); err == nil {
+		http.Error(w, "Email already registered", http.StatusConflict)
+		return
+	}
+	if _, err := h.userModel.GetByStudentNumber(req.StudentNumber); err == nil {
+		http.Error(w, "Student number already registered", http.StatusConflict)
+		return
+	}
 
-    if req.Password != req.ConfirmPassword {
-        log.Printf("Passwords do not match for request: %+v", req)
-        http.Error(w, "Passwords do not match", http.StatusBadRequest)
-        return
-    }
+	hashedPassword, err := utils.HashPassword(req.Password)
+	if err != nil {
+		log.Printf("Hash failed: %v", err)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
 
-    // Check if user already exists
-    _, err := h.UserModel.GetByEmail(req.Email)
-    if err == nil {
-        log.Printf("Email already registered: %s", req.Email)
-        http.Error(w, "Email already registered", http.StatusConflict)
-        return
-    } else if err != sql.ErrNoRows {
-        log.Printf("Database error checking email %s: %v", req.Email, err)
-        http.Error(w, "Internal server error", http.StatusInternalServerError)
-        return
-    }
+	tx, err := h.db.Begin()
+	if err != nil {
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback()
 
-    // Check if student number already exists
-    _, err = h.UserModel.GetByStudentNumber(req.StudentNumber)
-    if err == nil {
-        log.Printf("Student number already registered: %s", req.StudentNumber)
-        http.Error(w, "Student number already registered", http.StatusConflict)
-        return
-    } else if err != sql.ErrNoRows {
-        log.Printf("Database error checking student number %s: %v", req.StudentNumber, err)
-        http.Error(w, "Internal server error", http.StatusInternalServerError)
-        return
-    }
+	var userID int
+	err = tx.QueryRow(`
+		INSERT INTO user_credentials (email, password_hash, created_at)
+		VALUES ($1, $2, $3) RETURNING id`,
+		strings.ToLower(req.Email), hashedPassword, time.Now(),
+	).Scan(&userID)
+	if err != nil {
+		log.Printf("Credential insert failed: %v", err)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
 
-    // Hash the password
-    hashedPassword, err := utils.HashPassword(req.Password)
-    if err != nil {
-        log.Printf("Error hashing password for %s: %v", req.StudentNumber, err)
-        http.Error(w, "Internal server error", http.StatusInternalServerError)
-        return
-    }
+	user := &models.User{
+		ID:            userID,
+		StudentNumber: req.StudentNumber,
+		FirstName:     strings.TrimSpace(req.FirstName),
+		LastName:      strings.TrimSpace(req.LastName),
+		Email:         strings.ToLower(req.Email),
+		IsStudent:     true,
+		Points:        0,
+		EmailVerified: false,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}
+	if err := h.userModel.Create(tx, user); err != nil {
+		log.Printf("User insert failed: %v", err)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
 
-    // Create user
-    user := &models.User{
-        ID:            req.StudentNumber,
-        FirstName:     req.FirstName,
-        LastName:      req.LastName,
-        Email:         req.Email,
-        UserType:      models.UserTypeStudent,
-        Points:        0,
-        EmailVerified: false,
-        CreatedAt:     time.Now(),
-        UpdatedAt:     time.Now(),
-    }
+	token, err := utils.GenerateRandomToken(32)
+	if err != nil {
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	if err := h.userModel.StoreVerificationToken(tx, userID, token, time.Now().Add(24*time.Hour)); err != nil {
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
 
-    if err := h.UserModel.Create(user, hashedPassword); err != nil {
-        log.Printf("Error creating user %s: %v", req.StudentNumber, err)
-        http.Error(w, "Failed to create user", http.StatusInternalServerError)
-        return
-    }
+	if err := tx.Commit(); err != nil {
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
 
-    // Generate verification token and store it
-    token, err := utils.GenerateRandomToken(32)
-    if err != nil {
-        log.Printf("Error generating verification token for %s: %v", req.StudentNumber, err)
-        http.Error(w, "Failed to generate verification token", http.StatusInternalServerError)
-        return
-    }
+	if err := h.emailSender.SendVerificationEmail(req.Email, token); err != nil {
+		log.Printf("Email send failed: %v", err)
+	}
 
-    // Store the verification token with a 24-hour expiry
-    if err := h.UserModel.StoreVerificationToken(user.ID, token, time.Now().Add(24*time.Hour)); err != nil {
-        log.Printf("Failed to store verification token for %s: %v", req.StudentNumber, err)
-        http.Error(w, "Failed to store verification token", http.StatusInternalServerError)
-        return
-    }
-
-    // Send verification email
-    log.Printf("Would send verification email to %s with token %s", req.Email, token)
-    if err := h.EmailSender.SendVerificationEmail(req.Email, token); err != nil {
-        log.Printf("Failed to send verification email to %s: %v", req.Email, err)
-        // For testing, don’t fail the request but log the error
-        http.Error(w, "Registration successful, but failed to send verification email", http.StatusOK)
-        return
-    }
-
-    w.WriteHeader(http.StatusCreated)
-    json.NewEncoder(w).Encode(map[string]string{
-        "message": "Registration successful. Please check your email to verify your account.",
-    })
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Registered. Verify your email."})
 }
 
-// VerifyEmail handles email verification
 func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
-    token := r.URL.Query().Get("token")
-    if token == "" {
-        http.Error(w, "Missing token", http.StatusBadRequest)
-        return
-    }
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		http.Error(w, "Missing token", http.StatusBadRequest)
+		return
+	}
 
-    // Verify the token and get the user ID
-    userID, err := h.UserModel.VerifyEmailToken(token)
-    if err != nil {
-        log.Printf("Invalid or expired token: %v", err)
-        http.Error(w, "Invalid or expired verification token", http.StatusBadRequest)
-        return
-    }
+	userID, err := h.userModel.VerifyEmailToken(token)
+	if err != nil {
+		http.Error(w, "Invalid or expired token", http.StatusBadRequest)
+		return
+	}
 
-    // Update the user's email verification status
-    if err := h.UserModel.VerifyEmail(userID); err != nil {
-        log.Printf("Failed to verify email for user %s: %v", userID, err)
-        http.Error(w, "Failed to verify email", http.StatusInternalServerError)
-        return
-    }
+	if err := h.userModel.VerifyEmail(userID); err != nil {
+		http.Error(w, "Verification failed", http.StatusInternalServerError)
+		return
+	}
 
-    // Delete the used token
-    if err := h.UserModel.DeleteVerificationToken(token); err != nil {
-        log.Printf("Failed to delete verification token for user %s: %v", userID, err)
-        // Don’t fail the request, but log the error
-    }
+	if err := h.userModel.DeleteVerificationToken(token); err != nil {
+		log.Printf("Token delete failed: %v", err)
+	}
 
-    w.WriteHeader(http.StatusOK)
-    json.NewEncoder(w).Encode(map[string]string{
-        "message": "Email verified successfully. You can now log in.",
-    })
+	json.NewEncoder(w).Encode(map[string]string{"message": "Email verified"})
 }
 
-// Login handles user login
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -196,167 +201,124 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate request
-	if req.StudentNumber == "" || req.Password == "" {
-		http.Error(w, "Missing student number or password", http.StatusBadRequest)
+	if !isValidStudentNumber(req.StudentNumber) {
+		http.Error(w, "Invalid student number", http.StatusBadRequest)
+		return
+	}
+	if req.Password == "" {
+		http.Error(w, "Password required", http.StatusBadRequest)
 		return
 	}
 
-	// Get user from database
-	user, err := h.UserModel.GetByStudentNumber(req.StudentNumber)
+	user, err := h.userModel.GetByStudentNumber(req.StudentNumber)
 	if err != nil {
-		http.Error(w, "Invalid student number or password", http.StatusUnauthorized)
+		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
-	// In a real app, you'd check if the email is verified
-	// if !user.EmailVerified {
-	//     http.Error(w, "Email not verified", http.StatusUnauthorized)
-	//     return
-	// }
+	if !user.EmailVerified {
+		http.Error(w, "Email not verified", http.StatusUnauthorized)
+		return
+	}
 
-	// Check password
-	passwordHash, err := h.UserModel.GetPasswordHash(req.StudentNumber)
+	hash, err := h.userModel.GetPasswordHash(user.ID)
+	if err != nil || utils.CheckPassword(hash, req.Password) != nil {
+		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		return
+	}
+
+	accessToken, err := utils.GenerateJWT(user, h.cfg.JWT.Secret, 24)
 	if err != nil {
-		http.Error(w, "Invalid student number or password", http.StatusUnauthorized)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
 	}
-
-	if err := utils.CheckPassword(passwordHash, req.Password); err != nil {
-		http.Error(w, "Invalid student number or password", http.StatusUnauthorized)
-		return
-	}
-
-	// Generate JWT tokens
-	accessToken, err := utils.GenerateJWT(user, h.Config.JWT.Secret, 24) // 24 hours
+	refreshToken, err := utils.GenerateJWT(user, h.cfg.JWT.Secret, 168)
 	if err != nil {
-		http.Error(w, "Failed to generate access token", http.StatusInternalServerError)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
 	}
 
-	refreshToken, err := utils.GenerateJWT(user, h.Config.JWT.Secret, 168) // 7 days
-	if err != nil {
-		http.Error(w, "Failed to generate refresh token", http.StatusInternalServerError)
-		return
-	}
-
-	// Set cookies
 	http.SetCookie(w, &http.Cookie{
 		Name:     "access_token",
 		Value:    accessToken,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
-		MaxAge:   24 * 3600, // 24 hours
+		Secure:   h.cfg.Server.Environment == "production",
+		MaxAge:   24 * 3600,
 		SameSite: http.SameSiteStrictMode,
 	})
-
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
 		Value:    refreshToken,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
-		MaxAge:   168 * 3600, // 7 days
+		Secure:   h.cfg.Server.Environment == "production",
+		MaxAge:   168 * 3600,
 		SameSite: http.SameSiteStrictMode,
 	})
 
-	// Return response
-	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"user": map[string]interface{}{
-			"id":         user.ID,
-			"first_name": user.FirstName,
-			"last_name":  user.LastName,
-			"email":      user.Email,
-			"user_type":  user.UserType,
-			"points":     user.Points,
-		},
+		"user":          user,
 		"access_token":  accessToken,
 		"refresh_token": refreshToken,
 	})
 }
 
-// Logout handles user logout
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	// Clear cookies
 	http.SetCookie(w, &http.Cookie{
 		Name:     "access_token",
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
 		MaxAge:   -1,
-		SameSite: http.SameSiteStrictMode,
 	})
-
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
 		MaxAge:   -1,
-		SameSite: http.SameSiteStrictMode,
 	})
-
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "Logged out successfully",
-	})
+	json.NewEncoder(w).Encode(map[string]string{"message": "Logged out"})
 }
 
-// RefreshToken handles token refresh
 func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
-	// Get refresh token from cookie
 	cookie, err := r.Cookie("refresh_token")
 	if err != nil {
-		http.Error(w, "Refresh token not found", http.StatusUnauthorized)
+		http.Error(w, "No refresh token", http.StatusUnauthorized)
 		return
 	}
 
-	refreshToken := cookie.Value
-
-	// Validate refresh token
-	claims, err := utils.ValidateJWT(refreshToken, h.Config.JWT.Secret)
+	claims, err := utils.ValidateJWT(cookie.Value, h.cfg.JWT.Secret)
 	if err != nil {
 		http.Error(w, "Invalid refresh token", http.StatusUnauthorized)
 		return
 	}
 
-	// Get user from database
-	user, err := h.UserModel.GetByID(claims.UserID)
+	user, err := h.userModel.GetByID(claims.UserID)
 	if err != nil {
 		http.Error(w, "User not found", http.StatusUnauthorized)
 		return
 	}
 
-	// Generate new access token
-	accessToken, err := utils.GenerateJWT(user, h.Config.JWT.Secret, 24) // 24 hours
+	accessToken, err := utils.GenerateJWT(user, h.cfg.JWT.Secret, 24)
 	if err != nil {
-		http.Error(w, "Failed to generate access token", http.StatusInternalServerError)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
 	}
 
-	// Set cookie
 	http.SetCookie(w, &http.Cookie{
 		Name:     "access_token",
 		Value:    accessToken,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
-		MaxAge:   24 * 3600, // 24 hours
+		Secure:   h.cfg.Server.Environment == "production",
+		MaxAge:   24 * 3600,
 		SameSite: http.SameSiteStrictMode,
 	})
-
-	// Return response
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"access_token": accessToken,
-	})
+	json.NewEncoder(w).Encode(map[string]string{"access_token": accessToken})
 }
 
-// ForgotPassword handles password reset requests
 func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Email string `json:"email"`
@@ -366,46 +328,35 @@ func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate request
-	if req.Email == "" {
-		http.Error(w, "Email is required", http.StatusBadRequest)
+	if !isValidEmail(req.Email) {
+		http.Error(w, "Invalid email", http.StatusBadRequest)
 		return
 	}
 
-	// Check if user exists
-	user, err := h.UserModel.GetByEmail(req.Email)
+	user, err := h.userModel.GetByEmail(req.Email)
 	if err != nil {
-		// Don't reveal that the email doesn't exist
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{
-			"message": "If your email is registered, you will receive a password reset code.",
-		})
+		json.NewEncoder(w).Encode(map[string]string{"message": "If email exists, reset OTP sent"})
 		return
 	}
 
-	// Generate OTP
 	otp, err := utils.GenerateOTP(6)
 	if err != nil {
-		http.Error(w, "Failed to generate OTP", http.StatusInternalServerError)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
 	}
 
-	// In a real app, you'd store the OTP with an expiry time
-	// For simplicity, we'll just send the email without storing the OTP
-
-	// Send password reset email
-	if err := h.EmailSender.SendPasswordResetEmail(user.Email, otp); err != nil {
-		http.Error(w, "Failed to send password reset email", http.StatusInternalServerError)
+	if err := h.userModel.StoreOTP(user.ID, otp, time.Now().Add(15*time.Minute)); err != nil {
+		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "If your email is registered, you will receive a password reset code.",
-	})
+	if err := h.emailSender.SendPasswordResetEmail(req.Email, otp); err != nil {
+		log.Printf("Email send failed: %v", err)
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"message": "If email exists, reset OTP sent"})
 }
 
-// VerifyOTP verifies the OTP for password reset
 func (h *AuthHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Email string `json:"email"`
@@ -416,32 +367,36 @@ func (h *AuthHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate request
-	if req.Email == "" || req.OTP == "" {
-		http.Error(w, "Email and OTP are required", http.StatusBadRequest)
+	if !isValidEmail(req.Email) || len(req.OTP) != 6 || !regexp.MustCompile(`^\d{6}$`).MatchString(req.OTP) {
+		http.Error(w, "Invalid email or OTP", http.StatusBadRequest)
 		return
 	}
 
-	// In a real app, you'd verify the OTP against what's stored in the database
-	// For simplicity, we'll assume the OTP is correct
+	user, err := h.userModel.GetByEmail(req.Email)
+	if err != nil {
+		http.Error(w, "Invalid OTP", http.StatusBadRequest)
+		return
+	}
 
-	// Generate a reset token
+	if err := h.userModel.VerifyOTP(user.ID, req.OTP); err != nil {
+		http.Error(w, "Invalid or expired OTP", http.StatusBadRequest)
+		return
+	}
+
 	resetToken, err := utils.GenerateRandomToken(32)
 	if err != nil {
-		http.Error(w, "Failed to generate reset token", http.StatusInternalServerError)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
 	}
 
-	// In a real app, you'd store the reset token with an expiry time
-	// For simplicity, we'll just return the token
+	if err := h.userModel.StoreResetToken(user.ID, resetToken, time.Now().Add(15*time.Minute)); err != nil {
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
 
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"reset_token": resetToken,
-	})
+	json.NewEncoder(w).Encode(map[string]string{"reset_token": resetToken})
 }
 
-// ResetPassword resets the user's password
 func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Email       string `json:"email"`
@@ -453,37 +408,36 @@ func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate request
-	if req.Email == "" || req.ResetToken == "" || req.NewPassword == "" {
-		http.Error(w, "Email, reset token, and new password are required", http.StatusBadRequest)
+	if !isValidEmail(req.Email) || req.ResetToken == "" || !isValidPassword(req.NewPassword) {
+		http.Error(w, "Invalid email, token, or password", http.StatusBadRequest)
 		return
 	}
 
-	// In a real app, you'd verify the reset token against what's stored in the database
-	// For simplicity, we'll assume the token is valid
-
-	// Get user from database
-	user, err := h.UserModel.GetByEmail(req.Email)
+	user, err := h.userModel.GetByEmail(req.Email)
 	if err != nil {
 		http.Error(w, "User not found", http.StatusNotFound)
 		return
 	}
 
-	// Hash the new password
-	hashedPassword, err := utils.HashPassword(req.NewPassword)
+	if err := h.userModel.VerifyResetToken(user.ID, req.ResetToken); err != nil {
+		http.Error(w, "Invalid or expired token", http.StatusBadRequest)
+		return
+	}
+
+	hash, err := utils.HashPassword(req.NewPassword)
 	if err != nil {
-		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
 	}
 
-	// Update the user's password
-	if err := h.UserModel.UpdatePassword(user.ID, hashedPassword); err != nil {
-		http.Error(w, "Failed to update password", http.StatusInternalServerError)
+	if err := h.userModel.UpdatePassword(user.ID, hash); err != nil {
+		http.Error(w, "Update failed", http.StatusInternalServerError)
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "Password reset successfully. You can now log in with your new password.",
-	})
+	if err := h.userModel.DeleteResetToken(user.ID, req.ResetToken); err != nil {
+		log.Printf("Token delete failed: %v", err)
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"message": "Password reset successful"})
 }

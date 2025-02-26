@@ -1,23 +1,25 @@
--- internal/database/migrations/000001_init_schema.up.sql
 CREATE TABLE user_credentials (
-    user_id VARCHAR(20) PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
     email VARCHAR(100) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE users (
-    id VARCHAR(20) PRIMARY KEY,
+    id INTEGER PRIMARY KEY REFERENCES user_credentials(id),
+    student_number VARCHAR(20) UNIQUE,
     first_name VARCHAR(50) NOT NULL,
     last_name VARCHAR(50) NOT NULL,
     email VARCHAR(100) UNIQUE NOT NULL,
-    user_type VARCHAR(20) NOT NULL CHECK (user_type IN ('STUDENT', 'ADMIN')),
+    is_student BOOLEAN NOT NULL DEFAULT TRUE,
     points INTEGER NOT NULL DEFAULT 0,
     email_verified BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    FOREIGN KEY (id) REFERENCES user_credentials(user_id)
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX idx_users_student_number ON users(student_number);
+CREATE INDEX idx_users_points ON users(points);
 
 CREATE TABLE materials (
     id SERIAL PRIMARY KEY,
@@ -28,20 +30,20 @@ CREATE TABLE materials (
     course VARCHAR(50) NOT NULL,
     file_url VARCHAR(255) NOT NULL,
     filename VARCHAR(255) NOT NULL,
-    uploader_id VARCHAR(20) NOT NULL,
-    upload_date TIMESTAMP NOT NULL DEFAULT NOW(),
-    FOREIGN KEY (uploader_id) REFERENCES users(id)
+    uploader_id INTEGER NOT NULL REFERENCES users(id),
+    upload_date TIMESTAMP NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX idx_materials_uploader_id ON materials(uploader_id);
+CREATE INDEX idx_materials_upload_date ON materials(upload_date);
 
 CREATE TABLE votes (
     id SERIAL PRIMARY KEY,
-    material_id INTEGER NOT NULL,
-    user_id VARCHAR(20) NOT NULL,
+    material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     vote_type VARCHAR(10) NOT NULL CHECK (vote_type IN ('UPVOTE', 'DOWNVOTE')),
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    FOREIGN KEY (material_id) REFERENCES materials(id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-    UNIQUE(material_id, user_id)
+    UNIQUE (material_id, user_id)
 );
 
 CREATE TABLE badges (
@@ -49,65 +51,41 @@ CREATE TABLE badges (
     name VARCHAR(50) NOT NULL,
     description TEXT NOT NULL,
     image_url VARCHAR(255) NOT NULL,
-    requirement_points INTEGER NOT NULL
+    points_required INTEGER NOT NULL
 );
 
 CREATE TABLE user_badges (
-    user_id VARCHAR(20) NOT NULL,
-    badge_id INTEGER NOT NULL,
-    awarded_date TIMESTAMP NOT NULL DEFAULT NOW(),
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-    FOREIGN KEY (badge_id) REFERENCES badges(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    badge_id INTEGER NOT NULL REFERENCES badges(id) ON DELETE CASCADE,
+    awarded_at TIMESTAMP NOT NULL DEFAULT NOW(),
     PRIMARY KEY (user_id, badge_id)
 );
 
 CREATE TABLE bookmarks (
     id SERIAL PRIMARY KEY,
-    material_id INTEGER NOT NULL,
-    user_id VARCHAR(20) NOT NULL,
+    material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    FOREIGN KEY (material_id) REFERENCES materials(id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-    UNIQUE(material_id, user_id)
-);
-
-CREATE TABLE reports (
-    id SERIAL PRIMARY KEY,
-    material_id INTEGER NOT NULL,
-    reporter_id VARCHAR(20) NOT NULL,
-    reason VARCHAR(100) NOT NULL,
-    additional_info TEXT,
-    status VARCHAR(20) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'RESOLVED', 'DISMISSED')),
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    resolved_at TIMESTAMP,
-    resolved_by VARCHAR(20),
-    resolution_notes TEXT,
-    FOREIGN KEY (material_id) REFERENCES materials(id) ON DELETE CASCADE,
-    FOREIGN KEY (reporter_id) REFERENCES users(id) ON DELETE CASCADE,
-    FOREIGN KEY (resolved_by) REFERENCES users(id) ON DELETE SET NULL
+    UNIQUE (material_id, user_id)
 );
 
 CREATE TABLE email_verifications (
     id SERIAL PRIMARY KEY,
-    user_id VARCHAR(20) NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     token VARCHAR(255) NOT NULL,
     expires_at TIMESTAMP NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE password_resets (
+CREATE TABLE reset_tokens (
     id SERIAL PRIMARY KEY,
-    user_id VARCHAR(20) NOT NULL,
-    otp VARCHAR(10) NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token VARCHAR(255) NOT NULL,
     expires_at TIMESTAMP NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
--- Insert default badges
-INSERT INTO badges (name, description, image_url, requirement_points) VALUES
-('Freshie Fighter', 'You have started your journey as a contributor!', '/badges/freshie-fighter.png', 0),
-('Dean''s Defender', 'You have become a respected contributor!', '/badges/deans-defender.png', 50),
-('Supreme ISKOlar', 'You are among the elite contributors!', '/badges/supreme-iskolar.png', 100);
-
+INSERT INTO badges (name, description, image_url, points_required) VALUES
+('Freshie', 'First contribution!', '/badges/freshie.png', 0),
+('Scholar', 'Solid contributor!', '/badges/scholar.png', 50),
+('Elite', 'Top-tier contributor!', '/badges/elite.png', 100);

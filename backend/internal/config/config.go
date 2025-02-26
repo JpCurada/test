@@ -10,11 +10,11 @@ type Config struct {
 	Database DatabaseConfig
 	JWT      JWTConfig
 	Email    EmailConfig
-	Storage  StorageConfig
 }
 
 type ServerConfig struct {
 	Port                   string
+	Environment            string
 	ReadTimeoutSeconds     int
 	WriteTimeoutSeconds    int
 	IdleTimeoutSeconds     int
@@ -31,9 +31,7 @@ type DatabaseConfig struct {
 }
 
 type JWTConfig struct {
-	Secret           string
-	AccessExpiryHrs  int
-	RefreshExpiryHrs int
+	Secret string
 }
 
 type EmailConfig struct {
@@ -45,19 +43,11 @@ type EmailConfig struct {
 	FromName     string
 }
 
-type StorageConfig struct {
-	Type        string // local, s3, etc.
-	Bucket      string
-	Region      string
-	AccessKey   string
-	SecretKey   string
-	LocalPath   string
-}
-
 func New() *Config {
 	return &Config{
 		Server: ServerConfig{
 			Port:                   getEnv("SERVER_PORT", "8080"),
+			Environment:            getEnv("ENVIRONMENT", "development"),
 			ReadTimeoutSeconds:     getEnvAsInt("SERVER_READ_TIMEOUT", 10),
 			WriteTimeoutSeconds:    getEnvAsInt("SERVER_WRITE_TIMEOUT", 10),
 			IdleTimeoutSeconds:     getEnvAsInt("SERVER_IDLE_TIMEOUT", 120),
@@ -72,9 +62,7 @@ func New() *Config {
 			SSLMode:  getEnv("DB_SSL_MODE", "disable"),
 		},
 		JWT: JWTConfig{
-			Secret:           getEnv("JWT_SECRET", "your-secret-key"),
-			AccessExpiryHrs:  getEnvAsInt("JWT_ACCESS_EXPIRY_HOURS", 24),
-			RefreshExpiryHrs: getEnvAsInt("JWT_REFRESH_EXPIRY_HOURS", 168), // 7 days
+			Secret: getEnv("JWT_SECRET", "your-secret-key"),
 		},
 		Email: EmailConfig{
 			SMTPHost:     getEnv("SMTP_HOST", "smtp.gmail.com"),
@@ -84,28 +72,18 @@ func New() *Config {
 			FromEmail:    getEnv("FROM_EMAIL", "no-reply@iskonnect.com"),
 			FromName:     getEnv("FROM_NAME", "ISKOnnect"),
 		},
-		Storage: StorageConfig{
-			Type:      getEnv("STORAGE_TYPE", "local"),
-			Bucket:    getEnv("STORAGE_BUCKET", "iskonnect"),
-			Region:    getEnv("STORAGE_REGION", "us-west-2"),
-			AccessKey: getEnv("STORAGE_ACCESS_KEY", ""),
-			SecretKey: getEnv("STORAGE_SECRET_KEY", ""),
-			LocalPath: getEnv("STORAGE_LOCAL_PATH", "./uploads"),
-		},
 	}
 }
 
 func getEnv(key, defaultValue string) string {
-	value := os.Getenv(key)
-	if value == "" {
-		return defaultValue
+	if value := os.Getenv(key); value != "" {
+		return value
 	}
-	return value
+	return defaultValue
 }
 
 func getEnvAsInt(key string, defaultValue int) int {
-	valueStr := getEnv(key, "")
-	if value, err := strconv.Atoi(valueStr); err == nil {
+	if value, err := strconv.Atoi(getEnv(key, "")); err == nil {
 		return value
 	}
 	return defaultValue

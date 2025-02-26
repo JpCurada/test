@@ -1,4 +1,3 @@
-// internal/api/middleware/auth.go
 package middleware
 
 import (
@@ -6,78 +5,65 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/ISKOnnect/iskonnect-web/internal/models"
 	"github.com/ISKOnnect/iskonnect-web/internal/utils"
 )
 
-// AuthMiddleware authenticates users
 type AuthMiddleware struct {
-	Secret string // Add secret as a field
+	secret string
 }
 
-// NewAuthMiddleware creates a new authentication middleware
-func NewAuthMiddleware(secret string) *AuthMiddleware { // Pass secret as a parameter
-	return &AuthMiddleware{
-		Secret: secret,
-	}
+func NewAuthMiddleware(secret string) *AuthMiddleware {
+	return &AuthMiddleware{secret: secret}
 }
 
-// Authenticate authenticates a request
 func (m *AuthMiddleware) Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Extract token from request
 		token := extractToken(r)
 		if token == "" {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 
-		// Validate token
-		claims, err := utils.ValidateJWT(token, m.Secret) // Use the secret from the struct
+		claims, err := utils.ValidateJWT(token, m.secret)
 		if err != nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 
-		// Add user ID to context
 		ctx := context.WithValue(r.Context(), "user_id", claims.UserID)
-		ctx = context.WithValue(ctx, "user_type", claims.UserType)
-
-		// Call next handler
+		ctx = context.WithValue(ctx, "is_student", claims.IsStudent)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-// RequireRole requires a specific user role
-func (m *AuthMiddleware) RequireRole(role models.UserType) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Get user type from context
-			userType, ok := r.Context().Value("user_type").(models.UserType)
-			if !ok || userType != role {
-				http.Error(w, "Forbidden", http.StatusForbidden)
-				return
-			}
-
-			// Call next handler
-			next.ServeHTTP(w, r)
-		})
-	}
+func (m *AuthMiddleware) RequireStudent(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		isStudent, ok := r.Context().Value("is_student").(bool)
+		if !ok || !isStudent {
+			http.Error(w, "Forbidden: Students only", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
-// extractToken extracts the JWT token from the request
-func extractToken(r *http.Request) string {
-	// First, try to get the token from the Authorization header
-	bearerToken := r.Header.Get("Authorization")
-	if bearerToken != "" && strings.HasPrefix(bearerToken, "Bearer ") {
-		return strings.TrimPrefix(bearerToken, "Bearer ")
-	}
+func (m *AuthMiddleware) RequireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		isStudent, ok := r.Context().Value("is_student").(bool)
+		if !ok || isStudent {
+			http.Error(w, "Forbidden: Admins only", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
-	// If not in the header, try to get it from the cookie
-	cookie, err := r.Cookie("access_token")
-	if err == nil {
+func extractToken(r *http.Request) string {
+	if bearer := r.Header.Get("Authorization"); strings.HasPrefix(bearer, "Bearer ") {
+		return strings.TrimPrefix(bearer, "Bearer ")
+	}
+	if cookie, err := r.Cookie("access_token"); err == nil {
 		return cookie.Value
 	}
-
 	return ""
 }

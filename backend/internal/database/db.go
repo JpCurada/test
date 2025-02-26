@@ -17,18 +17,15 @@ func Connect(cfg config.DatabaseConfig) (*sql.DB, error) {
 
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
-		log.Printf("Failed to open database connection: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("failed to open db: %w", err)
 	}
 
-	if err = db.Ping(); err != nil {
-		log.Printf("Failed to ping database: %v", err)
-		return nil, err
+	if err := db.Ping(); err != nil {
+		return nil, fmt.Errorf("failed to ping db: %w", err)
 	}
 
-	log.Printf("Successfully connected to database: %s", cfg.DBName)
 	db.SetMaxOpenConns(25)
 	db.SetMaxIdleConns(25)
-
+	log.Printf("Connected to database: %s", cfg.DBName)
 	return db, nil
 }
